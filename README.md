@@ -67,6 +67,7 @@ Codex App  →  retry wrapper  →  original Codex backend
 - Observes `turn/completed` with `status: failed` and `serverOverloaded`, or the exact selected-model-capacity message.
 - Sends `turn/start` with empty input, preserving the thread's sticky model, permissions, directory, and mode.
 - Uses **no sleep, timer, backoff, or maximum attempt count in the capacity retry path**.
+- Retries temporary `EmptyInput` rejections immediately. When another client has already started the next turn, follows that turn instead of abandoning retries or starting duplicate work.
 - Stops retrying after success, a different error, or the App's Stop action. Stop also handles a retry that has just started.
 - Leaves ordinary CLI commands and noncapacity errors alone. Credentials, prompts, and model output are not recorded in its operational log.
 
@@ -106,6 +107,14 @@ python3 make_bundle.py
 ```
 
 Tests use simulated backends, not model requests. They cover 10,000 consecutive capacity failures, actual stdio/WebSocket subprocesses, stopping during retry creation, frame fragmentation, duplicate events, other errors, repeated installation, upgrade restoration, checksum failures, protocol incompatibility, and rollback.
+
+An optional integration test exercises an installed original CLI, including the real `EmptyInput` response when two clients race to continue. It uses an isolated temporary Codex home and a local HTTP stub, with no user credentials or model inference. The test shim classifies the stub's terminal errors as capacity failures to exercise the retry timing:
+
+```sh
+CODEX_CAPACITY_TEST_CLI=/path/to/original/codex python3 -m unittest -v test_real_backend
+```
+
+`status` checks installation and protocol compatibility. A healthy result alone does not prove that a live capacity retry was accepted; operational logs distinguish `retry_dispatched`, `retry_accepted`, and `retry_request_rejected`.
 
 ## Logs
 

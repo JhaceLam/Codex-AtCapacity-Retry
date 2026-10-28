@@ -2,16 +2,17 @@
   "created_date": "2026-10-28",
   "files": {
     "LICENSE": "9ac2bc3a7d31ae23d34ae8ae8504cd412770cdfc7033607c10b2a4dbc6dad0b9",
-    "README.md": "1b608c245d484f9eeaf1894f4e267e89a151f511fe22ca5bdc0d0aacef096b2f",
-    "README.zh-CN.md": "a7c1bd70eb429a204bb9a14165776ceafc9aff2b41089885c42aa3f8c27d0f1e",
-    "patch_manager.py": "b9cc257b8d3412f46efa5c53134ec5eca4866d07cce555a213be5592981980e3",
+    "README.md": "8bc71675e21e2d4493f573c7ab3c20f7833a8ec3b1076e6f47032a3298f0ea17",
+    "README.zh-CN.md": "cd311b90cc2bf3de778e6d8645dcfe6d5699f76ad5ad7ce2bdb98fb35a1e14ed",
+    "patch_manager.py": "491caf39d7fb46b58dd4d7e1e8b9753197e4206b0f00d3a5c6c2e912b0f3592a",
     "test_patch_manager.py": "07f8970b7738b82c67eaa0d04f17f48b8f854b0941480cd84426620d5e6303fc",
-    "test_wrapper.py": "0fecb49472032845a38a3f042511dba7379fbd13515217f3244a70345489efc7",
-    "wrapper.py": "7f1e91d5be724dcc58d348b1dd4642c768fa99085cda7516da0a521fd4f5bcce"
+    "test_real_backend.py": "a4d45c6f903de7fde5e45ddf0f5d13c42dbb98d2bd13bb5dcc8279f40e2d279b",
+    "test_wrapper.py": "42678432d556339ab8151543268349d358ddc16cf3234727af151ac14e59abb9",
+    "wrapper.py": "2f380e8e4cf7f9089f0b987f2ae589afab159f20add879bd4f74bcf0ecd8f4b0"
   },
   "patch_id": "codex-capacity-immediate-retry",
   "project": "Codex-AtCapacity-Retry",
   "retry_delay_ms": 0,
   "retry_limit": null,
-  "version": "1.1.0"
+  "version": "1.1.1"
 }

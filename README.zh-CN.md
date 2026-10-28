@@ -72,6 +72,7 @@ Codex App → 重试包装器 → 原 Codex 后台
 - 识别最终 `turn/completed` 容量失败，再发起 `turn/start` 空输入继续请求。
 - 不切模型、不复制原提示词，沿用会话已有模型、权限、目录和模式。
 - 容量重试路径没有 sleep、计时器、退避或次数上限。
+- `EmptyInput` 临时拒绝后立即重试；其他连接已启动下一轮时接续该轮，避免停止重试或重复启动工作。
 - 成功、其他错误或点击停止后结束；停止也处理“下一次重试刚启动”的竞态。
 - 普通 CLI 命令与非容量错误不受影响。
 
@@ -107,6 +108,14 @@ python3 make_bundle.py
 ```
 
 测试使用模拟后台，不向模型发请求，覆盖连续 10,000 次容量错误、两种协议、停止竞态、升级覆盖后的恢复及回滚等场景。
+
+还可以对已安装的真实 CLI 运行隔离集成测试，复现多个连接同时继续时后台返回 `EmptyInput` 的情况。测试使用临时 Codex 目录和本地 HTTP 模拟服务，不读取用户凭据，也不运行模型推理；测试适配层将模拟服务的最终错误标记为容量错误，以验证重试时序：
+
+```sh
+CODEX_CAPACITY_TEST_CLI=/path/to/original/codex python3 -m unittest -v test_real_backend
+```
+
+`status` 检查安装和协议兼容性。健康状态本身不代表真实重试已被接受；日志分别记录 `retry_dispatched`、`retry_accepted` 和 `retry_request_rejected`。
 
 Mac 重试日志：`~/Library/Logs/codex-capacity-retry/events.jsonl`。
 Linux 重试日志：`~/.codex/log/capacity-immediate-retry.jsonl`。

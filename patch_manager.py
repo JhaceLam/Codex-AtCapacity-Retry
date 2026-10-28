@@ -21,11 +21,11 @@ import tempfile
 import time
 
 PROJECT_NAME = 'Codex-AtCapacity-Retry'
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 # Keep the installed patch identifier and paths stable for existing users.
 PATCH_ID = 'codex-capacity-immediate-retry'
 LABEL = 'com.local.codex-capacity-patch'
-FILES = ('wrapper.py', 'test_wrapper.py', 'patch_manager.py', 'test_patch_manager.py',
+FILES = ('wrapper.py', 'test_wrapper.py', 'test_real_backend.py', 'patch_manager.py', 'test_patch_manager.py',
          'README.md', 'README.zh-CN.md', 'LICENSE')
 
 

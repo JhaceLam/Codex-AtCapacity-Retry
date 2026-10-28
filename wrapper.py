@@ -92,6 +92,8 @@ class Retrier:
         self.last_completed = {}
         self.counts = {}
         self.requests = {}
+        self.request_context = {}
+        self.generations = {}
         self.retry_threads = set()
         self.active = {}
         self.deferred_interrupts = {}
@@ -116,6 +118,7 @@ class Retrier:
                         self.deferred_interrupts.setdefault(tid, []).append(message)
                         return 'defer'
             elif method == 'turn/start':
+                self.generations[tid] = self.generations.get(tid, 0) + 1
                 self.paused.discard(tid)
                 self.counts.pop(tid, None)
                 self.retry_threads.discard(tid)
@@ -123,12 +126,44 @@ class Retrier:
             return 'raw'
 
     def started(self, tid, turn_id):
-        if tid not in self.retry_threads or not turn_id:
+        if not tid or not turn_id or self.last_completed.get(tid) == turn_id:
             return
         self.active[tid] = turn_id
+        if tid not in self.retry_threads:
+            return
         for request in self.deferred_interrupts.pop(tid, []):
             request['params'] = {**request['params'], 'turnId': turn_id}
             self.send(request)
+
+    def dispatch(self, tid, failed_turn_id):
+        """One request at a time, with no timer, backoff, or attempt ceiling."""
+        if self.stopping or tid in self.paused:
+            return
+        self.counts[tid] = self.counts.get(tid, 0) + 1
+        rid = '__capacity_retry_' + uuid.uuid4().hex
+        self.requests[rid] = tid
+        self.request_context[rid] = (failed_turn_id, self.generations.get(tid, 0))
+        self.retry_threads.add(tid)
+        request = {'id': rid, 'method': 'turn/start', 'params': {
+            'threadId': tid, 'input': [], 'turnTrigger': 'capacity_retry_automatic'}}
+        # Omitted model/permissions/mode inherit the existing thread settings.
+        before = time.monotonic_ns()
+        self.send(request)
+        self.log(event='retry_dispatched', thread_id=tid, failed_turn_id=failed_turn_id,
+                 attempt=self.counts[tid], artificial_delay_ms=0,
+                 write_us=(time.monotonic_ns() - before) // 1000)
+
+    @staticmethod
+    def rejection_reason(error):
+        # Record only a fixed label: RPC error text can contain private context.
+        message = str(error.get('message', '')).lower()
+        if error.get('code') == -32603 and 'emptyinput' in message:
+            return 'turn_transition'
+        data = error.get('data')
+        if (isinstance(data, dict) and data.get('codexErrorInfo') == 'serverOverloaded') or (
+                message.strip() == 'selected model is at capacity. please try a different model.'):
+            return 'capacity'
+        return 'other'
 
     def server(self, message, forward):
         """Forward client-visible events before immediately dispatching the retry."""
@@ -136,16 +171,31 @@ class Retrier:
             request_id = message.get('id')
             if request_id in self.requests:
                 tid = self.requests.pop(request_id)
+                failed_turn_id, generation = self.request_context.pop(request_id)
+                current = generation == self.generations.get(tid, 0) and tid in self.retry_threads
                 if 'error' in message:
-                    self.paused.add(tid)
+                    error = message.get('error') or {}
+                    reason = self.rejection_reason(error)
                     self.log(event='retry_request_rejected', thread_id=tid,
-                             rpc_code=(message.get('error') or {}).get('code'))
+                             rpc_code=error.get('code'), reason=reason)
+                    if current and tid not in self.paused and not self.stopping:
+                        if self.active.get(tid) and self.active[tid] != failed_turn_id:
+                            self.log(event='retry_already_running', thread_id=tid,
+                                     turn_id=self.active[tid])
+                            return
+                        if reason in ('turn_transition', 'capacity'):
+                            self.dispatch(tid, failed_turn_id)
+                            return
+                        self.retry_threads.discard(tid)
                     for request in self.deferred_interrupts.pop(tid, []):
                         # The retry was rejected, so there is no new turn to stop.
                         self.send({**request, 'params': {**request['params'],
                                    'turnId': self.last_completed.get(tid, request['params']['turnId'])}})
                 else:
-                    self.started(tid, ((message.get('result') or {}).get('turn') or {}).get('id'))
+                    turn_id = ((message.get('result') or {}).get('turn') or {}).get('id')
+                    if current:
+                        self.started(tid, turn_id)
+                    self.log(event='retry_accepted', thread_id=tid, turn_id=turn_id)
                 return
             forward()
             if message.get('method') == 'turn/started':
@@ -159,7 +209,8 @@ class Retrier:
             if not tid or not turn_id or self.last_completed.get(tid) == turn_id:
                 return
             self.last_completed[tid] = turn_id
-            self.active.pop(tid, None)
+            if self.active.get(tid) == turn_id:
+                self.active.pop(tid, None)
             error = turn.get('error') or {}
             capacity = error.get('codexErrorInfo') == 'serverOverloaded' or (
                 error.get('message', '').strip() ==
@@ -168,18 +219,11 @@ class Retrier:
                 self.counts.pop(tid, None)
                 self.retry_threads.discard(tid)
                 return
-            self.counts[tid] = self.counts.get(tid, 0) + 1
-            rid = '__capacity_retry_' + uuid.uuid4().hex
-            self.requests[rid] = tid
-            self.retry_threads.add(tid)
-            request = {'id': rid, 'method': 'turn/start', 'params': {
-                'threadId': tid, 'input': [], 'turnTrigger': 'capacity_retry_automatic'}}
-            # Omitted model/permissions/mode inherit the existing thread settings.
-            before = time.monotonic_ns()
-            self.send(request)
-            self.log(event='retry_dispatched', thread_id=tid, failed_turn_id=turn_id,
-                     attempt=self.counts[tid], artificial_delay_ms=0,
-                     write_us=(time.monotonic_ns() - before) // 1000)
+            if self.active.get(tid):
+                self.retry_threads.add(tid)
+                self.log(event='retry_already_running', thread_id=tid, turn_id=self.active[tid])
+            elif tid not in self.requests.values():
+                self.dispatch(tid, turn_id)
 
 
 def main():

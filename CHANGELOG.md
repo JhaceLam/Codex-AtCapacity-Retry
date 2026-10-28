@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+- Keep retrying immediately when a continuation is temporarily rejected with `EmptyInput`.
+- Adopt an already-started turn when multiple clients race to retry the same failure.
+- Preserve Stop and manual-message handling while a retry request is in flight.
+- Log accepted retries and fixed rejection categories without recording RPC error text.
+- Add an optional offline integration test against an installed real CLI.
+
 ## 1.1.0
 
 - Publish as **Codex-AtCapacity-Retry** with English and Chinese documentation.

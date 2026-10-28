@@ -27,8 +27,9 @@ class Tests(unittest.TestCase):
             r.server(response, lambda: self.fail('Internal response leaked'))
         self.assertEqual(len(sent), 10000)
         self.assertEqual(len(visible), 10000)
-        self.assertEqual(logs[-1]['attempt'], 10000)
-        self.assertTrue(all(x['artificial_delay_ms'] == 0 for x in logs))
+        retries = [x for x in logs if x['event'] == 'retry_dispatched']
+        self.assertEqual(retries[-1]['attempt'], 10000)
+        self.assertTrue(all(x['artificial_delay_ms'] == 0 for x in retries))
         self.assertEqual(sent[-1]['params'], {'threadId': 'thread-a', 'input': [],
                                            'turnTrigger': 'capacity_retry_automatic'})
         self.assertEqual(r.requests, {})
@@ -47,6 +48,78 @@ class Tests(unittest.TestCase):
         r.server(completed('resumed'), lambda: None)
         self.assertEqual(len(sent), 1)
         r.server(completed('resumed'), lambda: None)
+        self.assertEqual(len(sent), 1)
+
+    def test_temporary_empty_input_rejections_retry_without_limit(self):
+        sent, logs = [], []
+        r = Retrier(sent.append, lambda **k: logs.append(k))
+        r.server(completed('failed'), lambda: None)
+        for i in range(10000):
+            rid = sent[-1]['id']
+            r.server({'id': rid, 'error': {'code': -32603,
+                'message': 'failed to submit turn input: EmptyInput'}},
+                lambda: self.fail('Internal rejection leaked'))
+        self.assertEqual(len(sent), 10001)
+        self.assertNotIn('thread-a', r.paused)
+        rid = sent[-1]['id']
+        r.server({'id': rid, 'result': {'turn': {'id': 'new'}}}, lambda: None)
+        self.assertEqual(r.active['thread-a'], 'new')
+        self.assertEqual(r.requests, {})
+        self.assertEqual(r.request_context, {})
+        self.assertTrue(all(x['artificial_delay_ms'] == 0 for x in logs
+                            if x['event'] == 'retry_dispatched'))
+
+    def test_running_turn_is_adopted_after_retry_rejection(self):
+        sent, logs = [], []
+        r = Retrier(sent.append, lambda **k: logs.append(k))
+        r.server(completed('old'), lambda: None)
+        rid = sent[0]['id']
+        r.server({'method': 'turn/started', 'params': {'threadId': 'thread-a',
+                  'turn': {'id': 'started-elsewhere'}}}, lambda: None)
+        r.server({'id': rid, 'error': {'code': -32603,
+                  'message': 'failed to submit turn input: EmptyInput'}}, lambda: None)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(logs[-1]['event'], 'retry_already_running')
+        stop = {'id': 12, 'method': 'turn/interrupt',
+                'params': {'threadId': 'thread-a', 'turnId': 'old'}}
+        self.assertEqual(r.client(stop), 'rewrite')
+        self.assertEqual(stop['params']['turnId'], 'started-elsewhere')
+
+    def test_manual_start_and_stop_cancel_rejected_retry(self):
+        for method in ['turn/start', 'turn/interrupt']:
+            sent = []
+            r = Retrier(sent.append)
+            r.server(completed('old'), lambda: None)
+            rid = sent[0]['id']
+            params = {'threadId': 'thread-a', 'turnId': 'old', 'input': []}
+            action = r.client({'id': 22, 'method': method, 'params': params})
+            r.server({'id': rid, 'error': {'code': -32603,
+                'message': 'failed to submit turn input: EmptyInput'}}, lambda: None)
+            self.assertEqual(len(sent), 2 if action == 'defer' else 1)
+            self.assertEqual(r.requests, {})
+
+    def test_capacity_rpc_rejections_retry_but_unrelated_errors_stop(self):
+        for error, retry in [
+            ({'code': -32603, 'message': 'Selected model is at capacity. Please try a different model.'}, True),
+            ({'code': -32603, 'data': {'codexErrorInfo': 'serverOverloaded'}}, True),
+            ({'code': -32603, 'message': 'authentication failed', 'data': 'private'}, False),
+            ({'code': -32602, 'message': 'invalid parameters'}, False),
+        ]:
+            sent = []
+            r = Retrier(sent.append)
+            r.server(completed('old'), lambda: None)
+            r.server({'id': sent[0]['id'], 'error': error}, lambda: None)
+            self.assertEqual(len(sent), 2 if retry else 1)
+
+    def test_old_completion_does_not_replace_a_newer_active_turn(self):
+        sent = []
+        r = Retrier(sent.append)
+        r.server({'method': 'turn/started', 'params': {'threadId': 'thread-a',
+                  'turn': {'id': 'already-running'}}}, lambda: None)
+        r.server(completed('old'), lambda: None)
+        self.assertEqual(sent, [])
+        self.assertEqual(r.active['thread-a'], 'already-running')
+        r.server(completed('already-running'), lambda: None)
         self.assertEqual(len(sent), 1)
 
     def test_websocket_mask_lengths_chunking_and_internal_reply_filter(self):
@@ -117,6 +190,9 @@ if proxy:
 r=read();send({'id':r['id'],'result':{}})
 for i in range(100):
  send({'method':'turn/completed','params':{'threadId':'thread-a','turn':{'id':str(i),'status':'failed','error':{'codexErrorInfo':'serverOverloaded'}}}})
+ for busy in range(3):
+  r=read();assert r['method']=='turn/start' and r['params']['input']==[]
+  send({'id':r['id'],'error':{'code':-32603,'message':'failed to submit turn input: EmptyInput'}})
  r=read();assert r['method']=='turn/start' and r['params']['input']==[]
  send({'id':r['id'],'result':{'turn':{'id':str(i+1)}}})
 send({'method':'turn/completed','params':{'threadId':'thread-a','turn':{'id':'100','status':'completed','error':None}}})
@@ -155,8 +231,8 @@ send({'method':'turn/completed','params':{'threadId':'thread-a','turn':{'id':'10
                 self.assertEqual(messages[-1]['params']['turn']['status'], 'completed')
                 events = [json.loads(x) for x in (root / 'events.jsonl').read_text().splitlines()]
                 retries = [x for x in events if x['event'] == 'retry_dispatched']
-                self.assertEqual(len(retries), 100)
-                self.assertEqual(retries[-1]['attempt'], 100)
+                self.assertEqual(len(retries), 400)
+                self.assertEqual(retries[-1]['attempt'], 400)
 
 
 if __name__ == '__main__':
