@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+dist/
+schema/
+.venv/
+config.json
+patch-state.json
+patch-rollback.json
+patch-targets.json
+entry-before.json
+launch-env-before.json
+verification*.json
+*.log
+*.jsonl
+backups/
